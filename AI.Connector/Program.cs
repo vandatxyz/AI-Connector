@@ -13,6 +13,9 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(); // Tạo tài liệu API Swagger
 
+// Đăng ký McpClientService (Singleton)
+builder.Services.AddSingleton<IMcpClientService, McpClientService>();
+
 // Đăng ký KernelService (Singleton vì Kernel có thể dùng chung)
 builder.Services.AddSingleton<IKernelService, KernelService>();
 

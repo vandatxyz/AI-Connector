@@ -1,6 +1,7 @@
 using Microsoft.SemanticKernel;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using ModelContextProtocol.Client;
 
 namespace AI.Connector.Services
 {
@@ -19,10 +20,12 @@ namespace AI.Connector.Services
     {
         private readonly Kernel _kernel;
         private readonly ILogger<KernelService> _logger;
+        private readonly IMcpClientService _mcpClientService;
 
-        public KernelService(IConfiguration configuration, ILogger<KernelService> logger)
+        public KernelService(IConfiguration configuration, ILogger<KernelService> logger, IMcpClientService mcpClientService)
         {
             _logger = logger;
+            _mcpClientService = mcpClientService;
 
             // 1. Tạo Builder để cấu hình Semantic Kernel
             var builder = Kernel.CreateBuilder();
@@ -36,15 +39,45 @@ namespace AI.Connector.Services
             _logger.LogInformation($"🔌 Đang kết nối tới LLM tại: {endpoint} (Model: {model})");
 
             // 3. Đăng ký connector OpenAI (dùng chung cho cả OpenAI thật và LM Studio)
-            // Vì LM Studio giả lập OpenAI API nên ta dùng AddOpenAIChatCompletion
             builder.AddOpenAIChatCompletion(
                 modelId: model,
                 apiKey: apiKey,
-                endpoint: new Uri(endpoint) // Quan trọng: trỏ về localhost:1234
+                endpoint: new Uri(endpoint)
             );
 
-            // 4. (Tùy chọn) Thêm các Plugin/Tool vào đây nếu có
-            // Ví dụ: builder.Plugins.AddFromType<YourMcpTool>();
+            // 4. Lấy Tools từ MCP Server và Add vào Kernel (Sync over Async - Acceptable in Constructor for demo)
+            // Trong thực tế nên tách việc khởi tạo này ra phương thức InitAsync riêng
+            var toolsTask = _mcpClientService.GetToolsAsync();
+            var tools = toolsTask.GetAwaiter().GetResult();
+
+            if (tools.Any())
+            {
+                _logger.LogInformation($"🎯 Tìm thấy {tools.Count} MCP Tools. Đang đăng ký vào Kernel...");
+                var functions = new List<KernelFunction>();
+
+                foreach (var tool in tools)
+                {
+                      // Tạo function wrapper cho từng tool
+                      var function = KernelFunctionFactory.CreateFromMethod(
+                          async (KernelArguments args, CancellationToken ct) =>
+                          {
+                              _logger.LogInformation($"🤖 Semantic Kernel invoking tool: {tool.Name}");
+                              
+                              // Convert arguments to dictionary
+                              var dictArgs = args.ToDictionary(k => k.Key, v => (object)v.Value);
+                              
+                              // Call McpClient
+                              return await _mcpClientService.CallToolAsync(tool.Name, dictArgs);
+                          },
+                          functionName: tool.Name,
+                          description: tool.Description
+                      );
+                      functions.Add(function);
+                }
+
+                 builder.Plugins.AddFromFunctions("McpTools", functions);
+                 _logger.LogInformation($"✅ Đã đăng ký thành công {functions.Count} MCP Functions");
+            }
 
             // 5. Xây dựng Kernel
             _kernel = builder.Build();
