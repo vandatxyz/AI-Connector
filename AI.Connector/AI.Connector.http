@@ -1,0 +1,6 @@
+@AI.Connector_HostAddress = http://localhost:5030
+
+GET {{AI.Connector_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
