@@ -4,20 +4,27 @@ using Microsoft.AspNetCore.Mvc;
 namespace AI.Connector.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")] // Đường dẫn sẽ là: api/chat
+    [Route("api/[controller]")]
     public class ChatController : ControllerBase
     {
         private readonly IChatService _chatService;
+        private readonly IVisionService _visionService;
+        private readonly IDocumentService _documentService;
         private readonly ILogger<ChatController> _logger;
 
-        // Dependency Injection: Inject ChatService vào Controller
-        public ChatController(IChatService chatService, ILogger<ChatController> logger)
+        public ChatController(
+            IChatService chatService,
+            IVisionService visionService,
+            IDocumentService documentService,
+            ILogger<ChatController> logger)
         {
             _chatService = chatService;
+            _visionService = visionService;
+            _documentService = documentService;
             _logger = logger;
         }
 
-        // Định nghĩa API POST: /api/chat/send
+        // POST: /api/chat/send - Chat text thông thường
         [HttpPost("send")]
         public async Task<IActionResult> SendMessage([FromBody] ChatRequest request)
         {
@@ -28,22 +35,13 @@ namespace AI.Connector.Controllers
 
             try
             {
-                // Tạo SessionId nếu người dùng không gửi lên (mặc định là "default-session")
                 string sessionId = string.IsNullOrWhiteSpace(request.SessionId) ? "default-session" : request.SessionId;
 
                 _logger.LogInformation($"📩 Nhận tin nhắn: {request.Message} (Session: {sessionId})");
 
-                // Gọi Service để xử lý với SessionId
                 var response = await _chatService.ChatAsync(request.Message, sessionId);
 
-                _logger.LogInformation($"📤 AI trả lời: {response}");
-
-                // Trả về kết quả JSON
-                return Ok(new 
-                { 
-                    success = true,
-                    data = response 
-                });
+                return Ok(new { success = true, data = response });
             }
             catch (Exception ex)
             {
@@ -51,12 +49,99 @@ namespace AI.Connector.Controllers
                 return StatusCode(500, new { success = false, error = ex.Message });
             }
         }
+
+        // POST: /api/chat/analyze-image - Phân tích ẢNH bằng Vision model
+        [HttpPost("analyze-image")]
+        public async Task<IActionResult> AnalyzeImage([FromBody] ImageAnalysisRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.ImageBase64))
+            {
+                return BadRequest(new { success = false, error = "ImageBase64 không được để trống" });
+            }
+
+            try
+            {
+                _logger.LogInformation($"🖼️ Nhận yêu cầu phân tích ảnh. Size: {request.ImageBase64.Length} chars");
+
+                var result = await _visionService.AnalyzeImageAsync(
+                    request.ImageBase64,
+                    request.Prompt,
+                    request.MimeType ?? "image/jpeg"
+                );
+
+                if (!result.Success)
+                {
+                    return StatusCode(500, new { success = false, error = result.Error });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = result.Content,
+                    model = result.Model
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Lỗi khi phân tích ảnh");
+                return StatusCode(500, new { success = false, error = ex.Message });
+            }
+        }
+
+        // POST: /api/chat/analyze-document - Phân tích TÀI LIỆU (PDF/Word text đã trích xuất)
+        [HttpPost("analyze-document")]
+        public async Task<IActionResult> AnalyzeDocument([FromBody] DocumentAnalysisRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.Content))
+            {
+                return BadRequest(new { success = false, error = "Content không được để trống" });
+            }
+
+            try
+            {
+                _logger.LogInformation($"📄 Nhận yêu cầu phân tích tài liệu. Content length: {request.Content.Length} chars");
+
+                var result = await _documentService.AnalyzeDocumentAsync(request.Content, request.Prompt);
+
+                if (!result.Success)
+                {
+                    return StatusCode(500, new { success = false, error = result.Error });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    data = result.Content,
+                    model = result.Model
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Lỗi khi phân tích tài liệu");
+                return StatusCode(500, new { success = false, error = ex.Message });
+            }
+        }
     }
 
-    // Class DTO (Data Transfer Object) để nhận dữ liệu từ Body
+    // DTOs
     public class ChatRequest
     {
         public string Message { get; set; } = string.Empty;
-        public string? SessionId { get; set; } // Thêm trường SessionId (Optional)
+        public string? SessionId { get; set; }
+    }
+
+    public class ImageAnalysisRequest
+    {
+        public string ImageBase64 { get; set; } = string.Empty;
+        public string? Prompt { get; set; }
+        public string? MimeType { get; set; } = "image/jpeg";
+        public string? SessionId { get; set; }
+    }
+
+    public class DocumentAnalysisRequest
+    {
+        public string Content { get; set; } = string.Empty;
+        public string? Prompt { get; set; }
+        public string? SessionId { get; set; }
     }
 }
